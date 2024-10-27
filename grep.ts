@@ -6,6 +6,17 @@ const VERSION = "2.3.0";
 const resultPageSaved = "GREP RESULT";
 const resultPageVirtual = "GREP RESULT 🔍";
 
+// Add type definition for our config
+interface GrepConfig {
+  smartCase?: boolean;
+  surround?: {
+    left?: string;
+    right?: string;
+  } | false;
+  saveResults?: boolean;
+  ignoreFolders?: string[]; // New configuration option
+}
+
 export async function showVersion() {
   try {
     const { stdout } = await shell.run("git", ["--version"]);
@@ -20,6 +31,26 @@ export async function showVersion() {
   }
 }
 
+async function shouldIgnoreFolder(folderPath: string, config: GrepConfig): Promise<boolean> {
+  if (!config.ignoreFolders) return false;
+  
+  // Normalize the folder path for comparison
+  const normalizedPath = normalizePath(folderPath);
+  
+  return config.ignoreFolders.some(ignorePattern => {
+    // Convert the ignore pattern to a proper path format
+    const pattern = normalizePath(ignorePattern);
+    
+    // Check if the folder matches the ignore pattern
+    // This handles both exact matches and wildcard patterns
+    if (pattern.endsWith('/*')) {
+      const basePattern = pattern.slice(0, -2);
+      return normalizedPath.startsWith(basePattern);
+    }
+    return normalizedPath === pattern;
+  });
+}
+
 async function grep(
   pattern: string,
   literal: boolean = false,
@@ -27,7 +58,7 @@ async function grep(
 ): Promise<string | undefined> {
   console.log(`grep("${pattern}", ${literal}, "${folder}")`);
 
-  const config = await system.getSpaceConfig("grep", {});
+  const config = await system.getSpaceConfig("grep", {}) as GrepConfig;
 
   let smartCase = true;
   if (config && config.smartCase === false) smartCase = false;
@@ -52,7 +83,8 @@ async function grep(
 
   let output: string;
   try {
-    const result = await shell.run("git", [
+    // Build git grep command with ignore patterns
+    const gitArgs = [
       "-c", // modify config to this command
       "core.quotePath=false", // handle non-ASCII paths
       "grep",
@@ -67,7 +99,9 @@ async function grep(
       pattern,
       "--",
       folder + (folder.endsWith("/") ? "" : "/") + "*.md",
-    ]);
+    ];
+
+    const result = await shell.run("git", gitArgs);
     if (result) {
       output = result.stdout;
     } else {
@@ -108,6 +142,10 @@ async function grep(
     // ensure it's a markdown file and normalize to page name
     if (!lines[0].endsWith(".md")) continue;
     const page = normalizePath(lines[0].slice(0, -3));
+
+    // Check if this file's folder should be ignored
+    const folderPath = page.substring(0, page.lastIndexOf("/") + 1);
+    if (await shouldIgnoreFolder(folderPath, config)) continue;
 
     // don't consider hits in results
     if (page === resultPageSaved) continue;
@@ -171,6 +209,7 @@ async function grep(
   return text;
 }
 
+// ... rest of the code remains the same ...
 async function openGrep(
   pattern: string,
   literal: boolean = false,
